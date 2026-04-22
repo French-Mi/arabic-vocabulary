@@ -186,49 +186,128 @@ function onDrop(e, targetVocabId) {
 // Touch-based drag-and-drop
 const touchDragId = ref(null)
 const touchClone = ref(null)
+const touchPressingId = ref(null)
+let touchPressTimer = null
+let touchStartX = 0
+let touchStartY = 0
+let touchLastX = 0
+let touchLastY = 0
+const LONG_PRESS_MS = 260
+const PRESS_CANCEL_MOVE_PX = 12
 
-function onTouchStart(e, vocabId) {
+function clearTouchPressTimer() {
+  if (touchPressTimer) {
+    clearTimeout(touchPressTimer)
+    touchPressTimer = null
+  }
+}
+
+function activateTouchDrag(vocabId, sourceEl, x, y) {
+  if (!sourceEl) return
+  if (touchPressingId.value !== vocabId) return
+
   touchDragId.value = vocabId
   ddDragId.value = vocabId
-  const touch = e.touches[0]
-  const el = e.target.closest('.dd-arabic-item')
-  if (!el) return
-  const clone = el.cloneNode(true)
+  ddHoverId.value = null
+
+  const clone = sourceEl.cloneNode(true)
   clone.classList.add('dd-touch-clone')
   clone.style.position = 'fixed'
-  clone.style.left = (touch.clientX - 60) + 'px'
-  clone.style.top = (touch.clientY - 20) + 'px'
+  clone.style.left = (x - 60) + 'px'
+  clone.style.top = (y - 20) + 'px'
   clone.style.zIndex = '1000'
   clone.style.pointerEvents = 'none'
   document.body.appendChild(clone)
   touchClone.value = clone
+
+  // Prevent page scroll while dragging on mobile devices.
+  document.body.style.overflow = 'hidden'
 }
-function onTouchMove(e) {
-  if (!touchClone.value) return
-  const touch = e.touches[0]
-  touchClone.value.style.left = (touch.clientX - 60) + 'px'
-  touchClone.value.style.top = (touch.clientY - 20) + 'px'
-}
-function onTouchEnd(e) {
+
+function cleanupTouchDrag() {
+  clearTouchPressTimer()
   if (touchClone.value) {
     touchClone.value.remove()
     touchClone.value = null
   }
-  if (!touchDragId.value) return
+  touchPressingId.value = null
+  touchDragId.value = null
+  ddDragId.value = null
+  ddHoverId.value = null
+  document.body.style.overflow = ''
+}
+
+function onTouchStart(e, vocabId) {
+  const touch = e.touches[0]
+  const sourceEl = e.currentTarget
+  if (!touch || !sourceEl) return
+
+  clearTouchPressTimer()
+  touchPressingId.value = vocabId
+  ddHoverId.value = null
+  touchStartX = touch.clientX
+  touchStartY = touch.clientY
+  touchLastX = touch.clientX
+  touchLastY = touch.clientY
+
+  touchPressTimer = setTimeout(() => {
+    activateTouchDrag(vocabId, sourceEl, touchLastX, touchLastY)
+  }, LONG_PRESS_MS)
+}
+
+function onTouchMove(e) {
+  const touch = e.touches[0]
+  if (!touch) return
+
+  touchLastX = touch.clientX
+  touchLastY = touch.clientY
+
+  if (!touchDragId.value) {
+    const movedX = Math.abs(touch.clientX - touchStartX)
+    const movedY = Math.abs(touch.clientY - touchStartY)
+    if (movedX > PRESS_CANCEL_MOVE_PX || movedY > PRESS_CANCEL_MOVE_PX) {
+      clearTouchPressTimer()
+      touchPressingId.value = null
+    }
+    return
+  }
+
+  e.preventDefault()
+  if (!touchClone.value) return
+  touchClone.value.style.left = (touch.clientX - 60) + 'px'
+  touchClone.value.style.top = (touch.clientY - 20) + 'px'
+
+  const hoverEl = document.elementFromPoint(touch.clientX, touch.clientY)
+  const hoverTarget = hoverEl?.closest('[data-vocab-id]')
+  ddHoverId.value = hoverTarget ? hoverTarget.getAttribute('data-vocab-id') : null
+}
+function onTouchEnd(e) {
+  clearTouchPressTimer()
+
+  if (!touchDragId.value) {
+    touchPressingId.value = null
+    return
+  }
+
   const touch = e.changedTouches[0]
   const dropEl = document.elementFromPoint(touch.clientX, touch.clientY)
   const targetEl = dropEl?.closest('[data-vocab-id]')
+
   if (targetEl) {
     const targetId = targetEl.getAttribute('data-vocab-id')
-    if (touchDragId.value === targetId) {
+    const draggedId = String(touchDragId.value)
+    if (draggedId === targetId) {
       ddMatches.value = { ...ddMatches.value, [targetId]: true }
     } else {
       ddWrongId.value = targetId
       setTimeout(() => { ddWrongId.value = null }, 600)
     }
   }
-  touchDragId.value = null
-  ddDragId.value = null
+  cleanupTouchDrag()
+}
+
+function onTouchCancel() {
+  cleanupTouchDrag()
 }
 
 // Advance from drag-drop: next group or flashcard stage
@@ -401,6 +480,7 @@ function answer(isKnown) {
 }
 
 function resetSession() {
+  cleanupTouchDrag()
   sessionStarted.value = false
   sessionFinished.value = false
   isRepeatRound.value = false
@@ -525,6 +605,9 @@ watch(selectedLessonIds, () => {
         </span>
       </div>
       <h3 class="mb-2">Ziehe das arabische Wort auf die passende Übersetzung:</h3>
+      <p class="text-light" style="font-size: 0.85rem; margin-bottom: 0.6rem">
+        Auf Mobilgeräten: Wort kurz gedrückt halten, dann ziehen.
+      </p>
 
       <div class="dd-container">
         <!-- German drop targets -->
@@ -556,14 +639,16 @@ watch(selectedLessonIds, () => {
             class="dd-arabic-item rtl"
             :class="{
               'dd-matched': ddMatches[vocab.id],
-              'dd-dragging': ddDragId === vocab.id
+              'dd-dragging': ddDragId === vocab.id,
+              'dd-pressing': touchPressingId === vocab.id && ddDragId !== vocab.id
             }"
             :draggable="!ddMatches[vocab.id]"
             @dragstart="!ddMatches[vocab.id] && onDragStart(vocab.id)"
             @dragend="onDragEnd"
-            @touchstart.prevent="!ddMatches[vocab.id] && onTouchStart($event, vocab.id)"
-            @touchmove.prevent="onTouchMove"
+            @touchstart="!ddMatches[vocab.id] && onTouchStart($event, vocab.id)"
+            @touchmove="onTouchMove"
             @touchend="onTouchEnd"
+            @touchcancel="onTouchCancel"
           >
             {{ vocab.arabic }}
           </div>
@@ -893,7 +978,7 @@ watch(selectedLessonIds, () => {
   align-items: center;
   justify-content: center;
   -webkit-user-select: none;
-  touch-action: none;
+  touch-action: pan-y;
 }
 
 .dd-arabic-item:active {
@@ -903,6 +988,11 @@ watch(selectedLessonIds, () => {
 .dd-arabic-item.dd-dragging {
   opacity: 0.4;
   transform: scale(0.95);
+}
+
+.dd-arabic-item.dd-pressing {
+  transform: scale(0.97);
+  box-shadow: 0 0 0 3px rgba(42, 111, 151, 0.25);
 }
 
 .dd-arabic-item.dd-matched {
