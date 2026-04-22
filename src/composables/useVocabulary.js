@@ -118,6 +118,58 @@ export function useVocabulary() {
     )
   }
 
+  function importLesson(jsonData, customTitle = null) {
+    try {
+      let lesson
+      const data = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData
+      
+      // Neues Format: nur Vokabeln-Array
+      if (Array.isArray(data)) {
+        if (!customTitle || !customTitle.trim()) {
+          throw new Error('Titel erforderlich')
+        }
+        lesson = {
+          id: generateId(),
+          title: customTitle.trim(),
+          createdAt: new Date().toISOString(),
+          vocabs: data
+            .filter((v) => v.german?.trim() || v.arabic?.trim())
+            .map((v) => ({
+              id: generateId(),
+              german: v.german?.trim() || '',
+              arabic: v.arabic?.trim() || '',
+              score: typeof v.score === 'number' ? v.score : 0,
+              mastery: v.mastery ? (v.mastery === 'green' || v.mastery === 'yellow' || v.mastery === 'red' ? v.mastery : undefined) : undefined
+            }))
+        }
+      } else if (data.title && Array.isArray(data.vocabs)) {
+        // Altes Format: komplettes Objekt mit title
+        lesson = {
+          id: generateId(),
+          title: data.title.trim(),
+          createdAt: new Date().toISOString(),
+          vocabs: data.vocabs
+            .filter((v) => v.german?.trim() || v.arabic?.trim())
+            .map((v) => ({
+              id: generateId(),
+              german: v.german?.trim() || '',
+              arabic: v.arabic?.trim() || '',
+              score: typeof v.score === 'number' ? v.score : 0,
+              mastery: v.mastery ? (v.mastery === 'green' || v.mastery === 'yellow' || v.mastery === 'red' ? v.mastery : undefined) : undefined
+            }))
+        }
+      } else {
+        throw new Error('Ungültiges Format')
+      }
+      
+      state.value.lessons.push(lesson)
+      state.value = { ...state.value }
+      return lesson
+    } catch (error) {
+      throw new Error(`Fehler beim Importieren: ${error.message}`)
+    }
+  }
+
   return {
     state,
     getLessons,
@@ -130,5 +182,6 @@ export function useVocabulary() {
     updateScore,
     updateMastery,
     getAllVocabs,
+    importLesson,
   }
 }

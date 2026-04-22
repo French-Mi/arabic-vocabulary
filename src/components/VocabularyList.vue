@@ -2,12 +2,20 @@
 import { computed, ref } from 'vue'
 import { useVocabulary } from '../composables/useVocabulary.js'
 
-const { getLessons, deleteLesson, deletePair, renameLesson } = useVocabulary()
+const { getLessons, deleteLesson, deletePair, renameLesson, importLesson } = useVocabulary()
 
 const lessons = computed(() => getLessons())
 const expandedLessons = ref(new Set())
 const editingLessonId = ref(null)
 const editTitle = ref('')
+const exportModalOpen = ref(false)
+const exportModalLesson = ref(null)
+const exportCopied = ref(false)
+const importModalOpen = ref(false)
+const importData = ref('')
+const importTitle = ref('')
+const importError = ref('')
+const importSuccess = ref('')
 
 function toggleLesson(id) {
   if (expandedLessons.value.has(id)) {
@@ -39,11 +47,105 @@ function confirmDeleteLesson(lesson) {
 function confirmDeletePair(lessonId, vocab) {
   deletePair(lessonId, vocab.id)
 }
+
+function openExportModal(lesson) {
+  exportModalLesson.value = lesson
+  exportModalOpen.value = true
+  exportCopied.value = false
+}
+
+function getExportData(lesson) {
+  return lesson.vocabs
+    .map(v => `"german": "${v.german}",\n      "arabic": "${v.arabic}"`)
+    .join(',\n      ')
+}
+
+function copyToClipboard() {
+  if (!exportModalLesson.value) return
+  const data = getExportData(exportModalLesson.value)
+  navigator.clipboard.writeText(data).then(() => {
+    exportCopied.value = true
+    setTimeout(() => {
+      exportCopied.value = false
+    }, 2000)
+  })
+}
+
+function closeExportModal() {
+  exportModalOpen.value = false
+  exportModalLesson.value = null
+}
+
+function openImportModal() {
+  importModalOpen.value = true
+  importData.value = ''
+  importTitle.value = ''
+  importError.value = ''
+  importSuccess.value = ''
+}
+
+function closeImportModal() {
+  importModalOpen.value = false
+  importData.value = ''
+  importTitle.value = ''
+  importError.value = ''
+  importSuccess.value = ''
+}
+
+function performImport() {
+  importError.value = ''
+  importSuccess.value = ''
+  
+  if (!importData.value.trim()) {
+    importError.value = 'Bitte füge Vokabel-Daten ein'
+    return
+  }
+
+  try {
+    // Parse the imported data to extract vocabs
+    const vocabsMatch = importData.value.match(/\[[\s\S]*\]/);
+    let vocabs
+    
+    if (vocabsMatch) {
+      // Try parsing as complete JSON first (array format)
+      try {
+        vocabs = JSON.parse(vocabsMatch[0])
+      } catch {
+        // If that fails, extract individual vocab entries
+        vocabs = []
+        const entryRegex = /\{\s*"german":\s*"([^"]*)",\s*"arabic":\s*"([^"]*)"/g
+        let match
+        while ((match = entryRegex.exec(importData.value)) !== null) {
+          vocabs.push({
+            german: match[1],
+            arabic: match[2]
+          })
+        }
+      }
+    } else {
+      // Try parsing entire input as JSON (old format)
+      vocabs = JSON.parse(importData.value)
+    }
+    
+    const lesson = importLesson(vocabs, importTitle.value)
+    importSuccess.value = `"${lesson.title}" mit ${lesson.vocabs.length} Vokabeln erfolgreich importiert!`
+    setTimeout(() => {
+      closeImportModal()
+    }, 2000)
+  } catch (error) {
+    importError.value = error.message
+  }
+}
 </script>
 
 <template>
   <div class="vocab-list-section">
-    <h2>📚 Meine Vokabeln</h2>
+    <div class="flex items-center justify-between" style="margin-bottom: 1rem">
+      <h2>📚 Meine Vokabeln</h2>
+      <button class="btn btn-sm btn-outline" @click="openImportModal" title="Importieren">
+        📥 Importieren
+      </button>
+    </div>
 
     <p v-if="lessons.length === 0" class="text-light mt-2">
       Noch keine Vokabeln gespeichert. Lade ein Bild im Tab "Upload" hoch.
@@ -81,6 +183,9 @@ function confirmDeletePair(lessonId, vocab) {
             <button class="btn btn-sm btn-outline" @click="startRename(lesson)" title="Umbenennen">
               ✎
             </button>
+            <button class="btn btn-sm btn-outline" @click="openExportModal(lesson)" title="Exportieren">
+              💾
+            </button>
             <button class="btn btn-sm btn-danger" @click="confirmDeleteLesson(lesson)" title="Löschen">
               🗑
             </button>
@@ -117,6 +222,82 @@ function confirmDeletePair(lessonId, vocab) {
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Export Modal -->
+  <div v-if="exportModalOpen" class="modal-overlay" @click.self="closeExportModal">
+    <div class="modal-content">
+      <div class="modal-header flex items-center justify-between">
+        <h3>{{ exportModalLesson?.title }} exportieren</h3>
+        <button class="modal-close" @click="closeExportModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="margin-bottom: 1rem; font-size: 0.9rem">
+          Kopiere die Daten unten und füge sie auf einem anderen Gerät mit dem 📥 Button ein.
+        </p>
+        <textarea
+          :value="exportModalLesson ? getExportData(exportModalLesson) : ''"
+          readonly
+          class="export-textarea"
+          rows="12"
+        ></textarea>
+      </div>
+      <div class="modal-footer flex items-center justify-end" style="gap: 0.5rem">
+        <button class="btn btn-outline" @click="closeExportModal">Schließen</button>
+        <button
+          class="btn btn-primary"
+          @click="copyToClipboard"
+          :class="{ 'btn-success': exportCopied }"
+        >
+          {{ exportCopied ? '✓ Kopiert!' : '📋 Kopieren' }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Import Modal -->
+  <div v-if="importModalOpen" class="modal-overlay" @click.self="closeImportModal">
+    <div class="modal-content">
+      <div class="modal-header flex items-center justify-between">
+        <h3>Vokabeln importieren</h3>
+        <button class="modal-close" @click="closeImportModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="margin-bottom: 1rem">
+          <label style="display: block; font-size: 0.9rem; margin-bottom: 0.25rem; font-weight: 500">
+            Lektions-Titel:
+          </label>
+          <input
+            v-model="importTitle"
+            type="text"
+            placeholder="z.B. Lektion 7"
+            style="width: 100%; padding: 0.5rem; border: 1px solid var(--color-border); border-radius: 4px; box-sizing: border-box"
+          />
+        </div>
+
+        <p style="margin-bottom: 0.5rem; font-size: 0.9rem">
+          Kopiere die Vokable-Daten vom 💾 Export hier ein:
+        </p>
+        <textarea
+          v-model="importData"
+          placeholder='"german": "Snack",\n      "arabic": "نَقنَقَة"'
+          class="export-textarea"
+          rows="12"
+        ></textarea>
+        <div v-if="importError" style="color: #c0392b; margin-top: 0.75rem; font-size: 0.9rem">
+          ⚠️ {{ importError }}
+        </div>
+        <div v-if="importSuccess" style="color: #2d8659; margin-top: 0.75rem; font-size: 0.9rem">
+          ✓ {{ importSuccess }}
+        </div>
+      </div>
+      <div class="modal-footer flex items-center justify-end" style="gap: 0.5rem">
+        <button class="btn btn-outline" @click="closeImportModal">Abbrechen</button>
+        <button class="btn btn-primary" @click="performImport">
+          📥 Importieren
+        </button>
       </div>
     </div>
   </div>
@@ -193,5 +374,79 @@ function confirmDeletePair(lessonId, vocab) {
 .vocab-score {
   text-align: center;
   font-size: 0.8rem;
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  width: 90%;
+  max-width: 600px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-header {
+  padding: 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: #666;
+}
+
+.modal-close:hover {
+  color: #000;
+}
+
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.export-textarea {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+
+.modal-footer {
+  padding: 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.btn-success {
+  background-color: #2d8659;
+  color: white;
 }
 </style>
