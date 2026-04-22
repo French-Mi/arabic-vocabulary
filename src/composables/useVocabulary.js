@@ -82,6 +82,16 @@ export function useVocabulary() {
     state.value = { ...state.value }
   }
 
+  function updatePair(lessonId, vocabId, german, arabic) {
+    const lesson = getLesson(lessonId)
+    if (!lesson) return
+    const vocab = lesson.vocabs.find((v) => v.id === vocabId)
+    if (!vocab) return
+    vocab.german = german.trim()
+    vocab.arabic = arabic.trim()
+    state.value = { ...state.value }
+  }
+
   function updateScore(lessonId, vocabId, known) {
     const lesson = getLesson(lessonId)
     if (!lesson) return
@@ -183,5 +193,6 @@ export function useVocabulary() {
     updateMastery,
     getAllVocabs,
     importLesson,
+    updatePair,
   }
 }

@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { useVocabulary } from '../composables/useVocabulary.js'
 
-const { getLessons, deleteLesson, deletePair, renameLesson, importLesson } = useVocabulary()
+const { getLessons, deleteLesson, deletePair, renameLesson, importLesson, updatePair } = useVocabulary()
 
 const lessons = computed(() => getLessons())
 const expandedLessons = ref(new Set())
@@ -16,6 +16,9 @@ const importData = ref('')
 const importTitle = ref('')
 const importError = ref('')
 const importSuccess = ref('')
+const editingVocab = ref(null)   // { lessonId, vocabId }
+const editGerman = ref('')
+const editArabic = ref('')
 
 function toggleLesson(id) {
   if (expandedLessons.value.has(id)) {
@@ -46,6 +49,22 @@ function confirmDeleteLesson(lesson) {
 
 function confirmDeletePair(lessonId, vocab) {
   deletePair(lessonId, vocab.id)
+}
+
+function startEditVocab(lessonId, vocab) {
+  editingVocab.value = { lessonId, vocabId: vocab.id }
+  editGerman.value = vocab.german
+  editArabic.value = vocab.arabic
+}
+
+function confirmEditVocab() {
+  if (!editingVocab.value) return
+  updatePair(editingVocab.value.lessonId, editingVocab.value.vocabId, editGerman.value, editArabic.value)
+  editingVocab.value = null
+}
+
+function cancelEditVocab() {
+  editingVocab.value = null
 }
 
 function openExportModal(lesson) {
@@ -92,6 +111,76 @@ function closeImportModal() {
   importSuccess.value = ''
 }
 
+function parseImportText(text) {
+  const lines = text.trim().split('\n').map(l => l.trim()).filter(Boolean)
+  if (lines.length === 0) return []
+
+  // --- Format 1: CSV (comma or semicolon separated) ---
+  // Detect if the first non-empty line looks like CSV (has comma/semicolon)
+  const firstLine = lines[0]
+  const isCSV = /,|;/.test(firstLine)
+
+  if (isCSV) {
+    const vocabs = []
+    for (const line of lines) {
+      // RFC 4180-style: handle quoted fields containing commas
+      const parts = parseCSVLine(line)
+      if (parts.length < 2) continue
+      const german = parts[0].trim()
+      const arabic = parts[1].trim()
+      if (!german || !arabic) continue
+      // Skip obvious header row
+      if (/deutsch|german|arabisch|arabic|ägyptisch/i.test(german)) continue
+      vocabs.push({ german, arabic })
+    }
+    return vocabs
+  }
+
+  // --- Format 2: "german": "...", "arabic": "..." ---
+  const germanMatches = [...text.matchAll(/"german":\s*"([^"]*)"/g)].map(m => m[1])
+  const arabicMatches = [...text.matchAll(/"arabic":\s*"([^"]*)"/g)].map(m => m[1])
+  if (germanMatches.length > 0) {
+    const vocabs = []
+    for (let i = 0; i < Math.min(germanMatches.length, arabicMatches.length); i++) {
+      vocabs.push({ german: germanMatches[i], arabic: arabicMatches[i] })
+    }
+    return vocabs
+  }
+
+  return []
+}
+
+// Minimal RFC 4180 CSV field parser for one line
+function parseCSVLine(line) {
+  const sep = line.includes(';') ? ';' : ','
+  const fields = []
+  let i = 0
+  while (i < line.length) {
+    if (line[i] === '"') {
+      // quoted field
+      let field = ''
+      i++ // skip opening quote
+      while (i < line.length) {
+        if (line[i] === '"' && line[i + 1] === '"') {
+          field += '"'; i += 2
+        } else if (line[i] === '"') {
+          i++; break
+        } else {
+          field += line[i++]
+        }
+      }
+      fields.push(field)
+      if (line[i] === sep) i++
+    } else {
+      const end = line.indexOf(sep, i)
+      if (end === -1) { fields.push(line.slice(i)); break }
+      fields.push(line.slice(i, end))
+      i = end + 1
+    }
+  }
+  return fields
+}
+
 function performImport() {
   importError.value = ''
   importSuccess.value = ''
@@ -101,27 +190,16 @@ function performImport() {
     return
   }
 
+  if (!importTitle.value.trim()) {
+    importError.value = 'Bitte gib einen Lektions-Titel ein'
+    return
+  }
+
   try {
-    let vocabs = []
-    const text = importData.value
-    
-    // Extract all "german": "..." entries
-    const germanRegex = /"german":\s*"([^"]*)"/g
-    const arabicRegex = /"arabic":\s*"([^"]*)"/g
-    
-    const germanMatches = [...text.matchAll(germanRegex)].map(m => m[1])
-    const arabicMatches = [...text.matchAll(arabicRegex)].map(m => m[1])
-    
-    // Pair up german and arabic values
-    for (let i = 0; i < Math.min(germanMatches.length, arabicMatches.length); i++) {
-      vocabs.push({
-        german: germanMatches[i],
-        arabic: arabicMatches[i]
-      })
-    }
-    
+    const vocabs = parseImportText(importData.value)
+
     if (vocabs.length === 0) {
-      importError.value = 'Keine gültigen Vokabeln gefunden'
+      importError.value = 'Keine gültigen Vokabeln gefunden. Unterstützte Formate: CSV (Deutsch,Arabisch) oder "german"/"-arabic"-Format.'
       return
     }
     
@@ -199,25 +277,65 @@ function performImport() {
             v-for="vocab in lesson.vocabs"
             :key="vocab.id"
             class="vocab-row"
+            :class="{ 'vocab-row--editing': editingVocab?.vocabId === vocab.id }"
           >
             <span
               class="mastery-dot"
               :class="vocab.mastery ? 'mastery-' + vocab.mastery : 'mastery-none'"
               :title="vocab.mastery === 'green' ? 'Sofort gewusst' : vocab.mastery === 'yellow' ? 'Nach Wiederholung gewusst' : vocab.mastery === 'red' ? 'Noch unsicher' : 'Noch nicht gelernt'"
             ></span>
-            <span class="vocab-de ltr">{{ vocab.german }}</span>
-            <span class="vocab-ar rtl">{{ vocab.arabic }}</span>
-            <span class="vocab-score text-light" :title="'Score: ' + vocab.score">
-              {{ vocab.score > 0 ? '+' : '' }}{{ vocab.score }}
-            </span>
-            <button
-              class="btn btn-sm btn-outline"
-              @click="confirmDeletePair(lesson.id, vocab)"
-              title="Entfernen"
-              style="padding: 0.2rem 0.4rem; font-size: 0.75rem"
-            >
-              ✕
-            </button>
+
+            <!-- Normal display mode -->
+            <template v-if="editingVocab?.vocabId !== vocab.id">
+              <span class="vocab-de ltr">{{ vocab.german }}</span>
+              <span class="vocab-ar rtl">{{ vocab.arabic }}</span>
+              <span class="vocab-score text-light" :title="'Score: ' + vocab.score">
+                {{ vocab.score > 0 ? '+' : '' }}{{ vocab.score }}
+              </span>
+              <button
+                class="btn btn-sm btn-outline"
+                @click="startEditVocab(lesson.id, vocab)"
+                title="Bearbeiten"
+                style="padding: 0.2rem 0.4rem; font-size: 0.75rem"
+              >✎</button>
+              <button
+                class="btn btn-sm btn-outline"
+                @click="confirmDeletePair(lesson.id, vocab)"
+                title="Entfernen"
+                style="padding: 0.2rem 0.4rem; font-size: 0.75rem"
+              >✕</button>
+            </template>
+
+            <!-- Inline edit mode -->
+            <template v-else>
+              <input
+                v-model="editGerman"
+                class="ltr vocab-edit-input"
+                @keyup.enter="confirmEditVocab"
+                @keyup.esc="cancelEditVocab"
+                autofocus
+              />
+              <input
+                v-model="editArabic"
+                class="rtl vocab-edit-input"
+                dir="rtl"
+                @keyup.enter="confirmEditVocab"
+                @keyup.esc="cancelEditVocab"
+              />
+              <span></span>
+              <button
+                class="btn btn-sm btn-success"
+                @click="confirmEditVocab"
+                title="Speichern"
+                style="padding: 0.2rem 0.4rem; font-size: 0.75rem"
+              >✓</button>
+              <button
+                class="btn btn-sm btn-outline"
+                @click="cancelEditVocab"
+                title="Abbrechen"
+                style="padding: 0.2rem 0.4rem; font-size: 0.75rem"
+              >✕</button>
+            </template>
           </div>
         </div>
       </div>
@@ -276,11 +394,15 @@ function performImport() {
         </div>
 
         <p style="margin-bottom: 0.5rem; font-size: 0.9rem">
-          Kopiere die Vokable-Daten vom 💾 Export hier ein:
+          Unterstützte Formate:<br>
+          <span style="font-family: monospace; font-size: 0.82rem; color: #555">
+            CSV:&nbsp; Deutsch,Arabisch (eine Vokabel pro Zeile)<br>
+            oder das 💾-Export-Format ("german"/"arabic")
+          </span>
         </p>
         <textarea
           v-model="importData"
-          placeholder='"german": "Snack",\n      "arabic": "نَقنَقَة"'
+          placeholder="Deutsch,Arabisch&#10;Hüttenkäse,جبنة قريش&#10;Brot,عيش"
           class="export-textarea"
           rows="12"
         ></textarea>
@@ -322,6 +444,8 @@ function performImport() {
 .vocab-row {
   display: grid;
   grid-template-columns: 12px 1fr 1fr 40px 32px;
+  /* dot | german | arabic | score | edit-btn | delete-btn */
+  grid-template-columns: 12px 1fr 1fr 40px 32px 32px;
   gap: 0.5rem;
   align-items: center;
   padding: 0.35rem 0.25rem;
@@ -372,6 +496,18 @@ function performImport() {
 .vocab-score {
   text-align: center;
   font-size: 0.8rem;
+}
+
+.vocab-edit-input {
+  padding: 0.15rem 0.3rem;
+  font-size: 0.9rem;
+  border: 1px solid var(--color-primary);
+  border-radius: 3px;
+  width: 100%;
+}
+
+.vocab-row--editing {
+  background: #f5f9ff;
 }
 
 /* Modal Styles */
