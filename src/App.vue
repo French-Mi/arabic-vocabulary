@@ -1,29 +1,9 @@
 <script setup>
 import { ref } from 'vue'
-import ImageUpload from './components/ImageUpload.vue'
-import CorrectionView from './components/CorrectionView.vue'
 import VocabularyList from './components/VocabularyList.vue'
 import FlashcardView from './components/FlashcardView.vue'
 
-const activeTab = ref('upload')
-
-// OCR result state (passed from ImageUpload → CorrectionView)
-const ocrResult = ref(null)
-
-function handleOcrComplete(result) {
-  ocrResult.value = result
-  activeTab.value = 'correction'
-}
-
-function handleCorrectionSaved() {
-  ocrResult.value = null
-  activeTab.value = 'vocabs'
-}
-
-function handleCorrectionCancel() {
-  ocrResult.value = null
-  activeTab.value = 'upload'
-}
+const activeTab = ref('vocabs')
 </script>
 
 <template>
@@ -33,12 +13,6 @@ function handleCorrectionCancel() {
     </header>
 
     <nav class="tab-bar">
-      <button
-        :class="{ active: activeTab === 'upload' }"
-        @click="activeTab = 'upload'"
-      >
-        📷 Upload
-      </button>
       <button
         :class="{ active: activeTab === 'vocabs' }"
         @click="activeTab = 'vocabs'"
@@ -54,21 +28,6 @@ function handleCorrectionCancel() {
     </nav>
 
     <main>
-      <ImageUpload
-        v-if="activeTab === 'upload'"
-        @ocr-complete="handleOcrComplete"
-      />
-
-      <CorrectionView
-        v-if="activeTab === 'correction' && ocrResult"
-        :lesson-id="ocrResult.lessonId"
-        :lesson-title="ocrResult.lessonTitle"
-        :pairs="ocrResult.pairs"
-        :raw-text="ocrResult.rawText"
-        @saved="handleCorrectionSaved"
-        @cancel="handleCorrectionCancel"
-      />
-
       <VocabularyList v-if="activeTab === 'vocabs'" />
 
       <FlashcardView v-if="activeTab === 'flashcards'" />

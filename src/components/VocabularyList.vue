@@ -102,29 +102,27 @@ function performImport() {
   }
 
   try {
-    // Parse the imported data to extract vocabs
-    const vocabsMatch = importData.value.match(/\[[\s\S]*\]/);
-    let vocabs
+    let vocabs = []
+    const text = importData.value
     
-    if (vocabsMatch) {
-      // Try parsing as complete JSON first (array format)
-      try {
-        vocabs = JSON.parse(vocabsMatch[0])
-      } catch {
-        // If that fails, extract individual vocab entries
-        vocabs = []
-        const entryRegex = /\{\s*"german":\s*"([^"]*)",\s*"arabic":\s*"([^"]*)"/g
-        let match
-        while ((match = entryRegex.exec(importData.value)) !== null) {
-          vocabs.push({
-            german: match[1],
-            arabic: match[2]
-          })
-        }
-      }
-    } else {
-      // Try parsing entire input as JSON (old format)
-      vocabs = JSON.parse(importData.value)
+    // Extract all "german": "..." entries
+    const germanRegex = /"german":\s*"([^"]*)"/g
+    const arabicRegex = /"arabic":\s*"([^"]*)"/g
+    
+    const germanMatches = [...text.matchAll(germanRegex)].map(m => m[1])
+    const arabicMatches = [...text.matchAll(arabicRegex)].map(m => m[1])
+    
+    // Pair up german and arabic values
+    for (let i = 0; i < Math.min(germanMatches.length, arabicMatches.length); i++) {
+      vocabs.push({
+        german: germanMatches[i],
+        arabic: arabicMatches[i]
+      })
+    }
+    
+    if (vocabs.length === 0) {
+      importError.value = 'Keine gültigen Vokabeln gefunden'
+      return
     }
     
     const lesson = importLesson(vocabs, importTitle.value)
