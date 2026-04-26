@@ -186,25 +186,15 @@ function onDrop(e, targetVocabId) {
 // Touch-based drag-and-drop
 const touchDragId = ref(null)
 const touchClone = ref(null)
-const touchPressingId = ref(null)
-let touchPressTimer = null
+const touchSourceEl = ref(null)
+const touchSourceId = ref(null)
 let touchStartX = 0
 let touchStartY = 0
-let touchLastX = 0
-let touchLastY = 0
-const LONG_PRESS_MS = 260
-const PRESS_CANCEL_MOVE_PX = 12
-
-function clearTouchPressTimer() {
-  if (touchPressTimer) {
-    clearTimeout(touchPressTimer)
-    touchPressTimer = null
-  }
-}
+const DRAG_THRESHOLD = 15 // Horizontal swipe distance to activate drag
 
 function activateTouchDrag(vocabId, sourceEl, x, y) {
   if (!sourceEl) return
-  if (touchPressingId.value !== vocabId) return
+  if (touchDragId.value) return // Already dragging
 
   touchDragId.value = vocabId
   ddDragId.value = vocabId
@@ -225,12 +215,12 @@ function activateTouchDrag(vocabId, sourceEl, x, y) {
 }
 
 function cleanupTouchDrag() {
-  clearTouchPressTimer()
   if (touchClone.value) {
     touchClone.value.remove()
     touchClone.value = null
   }
-  touchPressingId.value = null
+  touchSourceEl.value = null
+  touchSourceId.value = null
   touchDragId.value = null
   ddDragId.value = null
   ddHoverId.value = null
@@ -242,50 +232,51 @@ function onTouchStart(e, vocabId) {
   const sourceEl = e.currentTarget
   if (!touch || !sourceEl) return
 
-  clearTouchPressTimer()
-  touchPressingId.value = vocabId
-  ddHoverId.value = null
+  touchSourceEl.value = sourceEl
+  touchSourceId.value = vocabId
   touchStartX = touch.clientX
   touchStartY = touch.clientY
-  touchLastX = touch.clientX
-  touchLastY = touch.clientY
-
-  touchPressTimer = setTimeout(() => {
-    activateTouchDrag(vocabId, sourceEl, touchLastX, touchLastY)
-  }, LONG_PRESS_MS)
 }
 
 function onTouchMove(e) {
   const touch = e.touches[0]
   if (!touch) return
 
-  touchLastX = touch.clientX
-  touchLastY = touch.clientY
+  const deltaX = touch.clientX - touchStartX
+  const deltaY = touch.clientY - touchStartY
+  const movedX = Math.abs(deltaX)
+  const movedY = Math.abs(deltaY)
 
-  if (!touchDragId.value) {
-    const movedX = Math.abs(touch.clientX - touchStartX)
-    const movedY = Math.abs(touch.clientY - touchStartY)
-    if (movedX > PRESS_CANCEL_MOVE_PX || movedY > PRESS_CANCEL_MOVE_PX) {
-      clearTouchPressTimer()
-      touchPressingId.value = null
+  // If not yet dragging, check if we should activate drag
+  if (!touchDragId.value && touchSourceEl.value && touchSourceId.value) {
+    // Activate drag when horizontal movement exceeds threshold and is more horizontal than vertical
+    if (movedX > DRAG_THRESHOLD && movedX > movedY) {
+      e.preventDefault()
+      activateTouchDrag(touchSourceId.value, touchSourceEl.value, touch.clientX, touch.clientY)
+      return
+    }
+    // Allow vertical scrolling if movement is primarily vertical
+    if (movedY > movedX) {
+      cleanupTouchDrag()
+      return
     }
     return
   }
 
-  e.preventDefault()
-  if (!touchClone.value) return
-  touchClone.value.style.left = (touch.clientX - 60) + 'px'
-  touchClone.value.style.top = (touch.clientY - 20) + 'px'
+  // If already dragging, update clone position
+  if (touchDragId.value && touchClone.value) {
+    e.preventDefault()
+    touchClone.value.style.left = (touch.clientX - 60) + 'px'
+    touchClone.value.style.top = (touch.clientY - 20) + 'px'
 
-  const hoverEl = document.elementFromPoint(touch.clientX, touch.clientY)
-  const hoverTarget = hoverEl?.closest('[data-vocab-id]')
-  ddHoverId.value = hoverTarget ? hoverTarget.getAttribute('data-vocab-id') : null
+    const hoverEl = document.elementFromPoint(touch.clientX, touch.clientY)
+    const hoverTarget = hoverEl?.closest('[data-vocab-id]')
+    ddHoverId.value = hoverTarget ? hoverTarget.getAttribute('data-vocab-id') : null
+  }
 }
 function onTouchEnd(e) {
-  clearTouchPressTimer()
-
   if (!touchDragId.value) {
-    touchPressingId.value = null
+    cleanupTouchDrag()
     return
   }
 
@@ -606,7 +597,7 @@ watch(selectedLessonIds, () => {
       </div>
       <h3 class="mb-2">Ziehe das arabische Wort auf die passende Übersetzung:</h3>
       <p class="text-light" style="font-size: 0.85rem; margin-bottom: 0.6rem">
-        Auf Mobilgeräten: Wort kurz gedrückt halten, dann ziehen.
+        Auf Mobilgeräten: Nach links wischen, um zu ziehen.
       </p>
 
       <div class="dd-container">
@@ -639,8 +630,7 @@ watch(selectedLessonIds, () => {
             class="dd-arabic-item rtl"
             :class="{
               'dd-matched': ddMatches[vocab.id],
-              'dd-dragging': ddDragId === vocab.id,
-              'dd-pressing': touchPressingId === vocab.id && ddDragId !== vocab.id
+              'dd-dragging': ddDragId === vocab.id
             }"
             :draggable="!ddMatches[vocab.id]"
             @dragstart="!ddMatches[vocab.id] && onDragStart(vocab.id)"

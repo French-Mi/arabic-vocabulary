@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useVocabulary } from '../composables/useVocabulary.js'
+import { parseVocabularyTable } from '../utils/parseVocabularyTable.js'
 
 const { getLessons, deleteLesson, deletePair, renameLesson, importLesson, updatePair } = useVocabulary()
 
@@ -118,7 +119,7 @@ function parseImportText(text) {
   // --- Format 1: CSV (comma or semicolon separated) ---
   // Detect if the first non-empty line looks like CSV (has comma/semicolon)
   const firstLine = lines[0]
-  const isCSV = /,|;/.test(firstLine)
+  const isCSV = /,|;/.test(firstLine) && !/\t/.test(firstLine)
 
   if (isCSV) {
     const vocabs = []
@@ -133,19 +134,24 @@ function parseImportText(text) {
       if (/deutsch|german|arabisch|arabic|ägyptisch/i.test(german)) continue
       vocabs.push({ german, arabic })
     }
-    return vocabs
+    if (vocabs.length > 0) return vocabs
   }
 
   // --- Format 2: "german": "...", "arabic": "..." ---
   const germanMatches = [...text.matchAll(/"german":\s*"([^"]*)"/g)].map(m => m[1])
   const arabicMatches = [...text.matchAll(/"arabic":\s*"([^"]*)"/g)].map(m => m[1])
-  if (germanMatches.length > 0) {
+  if (germanMatches.length > 0 && arabicMatches.length > 0) {
     const vocabs = []
     for (let i = 0; i < Math.min(germanMatches.length, arabicMatches.length); i++) {
       vocabs.push({ german: germanMatches[i], arabic: arabicMatches[i] })
     }
     return vocabs
   }
+
+  // --- Format 3: Tab-separated or table format (fallback to parseVocabularyTable) ---
+  // This handles tabs, pipes, multiple spaces, and detects Arabic/German columns automatically
+  const tableVocabs = parseVocabularyTable(text)
+  if (tableVocabs.length > 0) return tableVocabs
 
   return []
 }
@@ -199,7 +205,7 @@ function performImport() {
     const vocabs = parseImportText(importData.value)
 
     if (vocabs.length === 0) {
-      importError.value = 'Keine gültigen Vokabeln gefunden. Unterstützte Formate: CSV (Deutsch,Arabisch) oder "german"/"-arabic"-Format.'
+      importError.value = 'Keine gültigen Vokabeln gefunden. Bitte überprüfe das Format (CSV, Tab-getrennte Tabelle oder "german"/"arabic"-Format).'
       return
     }
     
@@ -396,13 +402,14 @@ function performImport() {
         <p style="margin-bottom: 0.5rem; font-size: 0.9rem">
           Unterstützte Formate:<br>
           <span style="font-family: monospace; font-size: 0.82rem; color: #555">
-            CSV:&nbsp; Deutsch,Arabisch (eine Vokabel pro Zeile)<br>
+            CSV:&nbsp; Deutsch,Arabisch<br>
+            Tabelle:&nbsp; Deutsch [Tab] Arabisch<br>
             oder das 💾-Export-Format ("german"/"arabic")
           </span>
         </p>
         <textarea
           v-model="importData"
-          placeholder="Deutsch,Arabisch&#10;Hüttenkäse,جبنة قريش&#10;Brot,عيش"
+          placeholder="Arabisch	Deutsch&#10;كشري الحلة الواحدة	Koshari im Ein-Topf&#10;أو:&#10;Deutsch,Arabisch&#10;Hüttenkäse,جبنة قريش"
           class="export-textarea"
           rows="12"
         ></textarea>
